@@ -77,6 +77,8 @@
 
 #include "doom_icon.c"
 
+#include <emscripten.h>
+
 //
 // D-DoomLoop()
 // Not a globally visible function,
@@ -488,10 +490,11 @@ void D_DoomLoop (void)
         wipegamestate = gamestate;
     }
 
-    while (1)
+    /*while (1)
     {
         D_RunFrame();
-    }
+    }*/
+    emscripten_set_main_loop(D_RunFrame, 0, 0);
 }
 
 

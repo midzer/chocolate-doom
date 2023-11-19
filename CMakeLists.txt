@@ -25,8 +25,11 @@ if(MSVC)
                     "/D_CRT_NONSTDC_NO_DEPRECATE")
 else()
     add_compile_options("-Wall" "-Wdeclaration-after-statement"
-                        "-Wredundant-decls")
+                        "-Wredundant-decls" "-O3" "-flto")
 endif()
+
+# Final build step
+# emcc -Wl,-u,htons,-u,ntohs -flto -O3 *.o ../../doom/libdoom.a ../../../opl/libopl.a ../../../textscreen/libtextscreen.a ../../../pcsound/libpcsound.a -o index.html -sUSE_SDL=2 -sUSE_SDL_MIXER=2 -sSDL2_MIXER_FORMATS='["mid"]' -sUSE_SDL_NET=2 -sUSE_LIBPNG -sASYNCIFY -sTOTAL_MEMORY=64MB -sENVIRONMENT=web --preload-file="dgguspat@/etc/timidity" --preload-file doom1.wad --preload-file default.cfg --preload-file chocolate-doom.cfg --closure 1
 
 option(CMAKE_FIND_PACKAGE_PREFER_CONFIG
        "Lookup package config files before using find modules" On)
@@ -34,7 +37,7 @@ option(CMAKE_FIND_PACKAGE_PREFER_CONFIG
 option(ENABLE_SDL2_NET "Enable SDL2_net" On)
 option(ENABLE_SDL2_MIXER "Enable SDL2_mixer" On)
 
-find_package(SDL2 2.0.14)
+find_package(SDL2 REQUIRED)
 if(ENABLE_SDL2_MIXER)
     find_package(SDL2_mixer 2.0.2)
 else()
