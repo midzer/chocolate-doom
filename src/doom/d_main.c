@@ -490,11 +490,10 @@ void D_DoomLoop (void)
         wipegamestate = gamestate;
     }
 
-    /*while (1)
+    while (1)
     {
         D_RunFrame();
-    }*/
-    emscripten_set_main_loop(D_RunFrame, 0, 0);
+    }
 }
 
 
@@ -1291,6 +1290,7 @@ static void G_CheckDemoStatusAtExit (void)
 //
 void D_DoomMain (void)
 {
+    emscripten_set_main_loop(&D_DoomLoop, 0, 0);
     int p;
     char file[256];
     char demolumpname[9];
