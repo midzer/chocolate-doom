@@ -77,8 +77,6 @@ static SDL_Rect blit_rect = {
     SCREENHEIGHT
 };
 
-static uint32_t pixel_format;
-
 // palette
 
 static SDL_Color palette[256];
@@ -130,6 +128,9 @@ int fullscreen = true;
 
 int aspect_ratio_correct = true;
 static int actualheight;
+
+// Smooth pixel scaling
+int smooth_pixel_scaling = true;
 
 // Force integer scales for resolution-independent rendering
 
@@ -275,6 +276,12 @@ void I_ShutdownGraphics(void)
     {
         SetShowCursor(true);
 
+        SDL_FreeSurface(argbbuffer);
+        SDL_FreeSurface(screenbuffer);
+        SDL_DestroyTexture(texture_upscaled);
+        SDL_DestroyTexture(texture);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(screen);
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
 
         initialized = false;
@@ -677,7 +684,7 @@ static void CreateUpscaledTexture(boolean force)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
     new_texture = SDL_CreateTexture(renderer,
-                                pixel_format,
+                                SDL_PIXELFORMAT_ARGB8888,
                                 SDL_TEXTUREACCESS_TARGET,
                                 w_upscale*SCREENWIDTH,
                                 h_upscale*SCREENHEIGHT);
@@ -777,28 +784,36 @@ void I_FinishUpdate (void)
     }
 
     // Blit from the paletted 8-bit screen buffer to the intermediate
-    // 32-bit RGBA buffer that we can load into the texture.
+    // 32-bit RGBA buffer and update the intermediate texture with the
+    // contents of the RGBA buffer.
 
+    SDL_LockTexture(texture, &blit_rect, &argbbuffer->pixels,
+                    &argbbuffer->pitch);
     SDL_LowerBlit(screenbuffer, &blit_rect, argbbuffer, &blit_rect);
-
-    // Update the intermediate texture with the contents of the RGBA buffer.
-
-    SDL_UpdateTexture(texture, NULL, argbbuffer->pixels, argbbuffer->pitch);
+    SDL_UnlockTexture(texture);
 
     // Make sure the pillarboxes are kept clear each frame.
 
     SDL_RenderClear(renderer);
 
-    // Render this intermediate texture into the upscaled texture
-    // using "nearest" integer scaling.
+    if (smooth_pixel_scaling && !force_software_renderer)
+    {
+        // Render this intermediate texture into the upscaled texture
+        // using "nearest" integer scaling.
+        SDL_SetRenderTarget(renderer, texture_upscaled);
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
 
-    SDL_SetRenderTarget(renderer, texture_upscaled);
-    SDL_RenderCopy(renderer, texture, NULL, NULL);
+        // Finally, render this upscaled texture to screen using linear scaling.
 
-    // Finally, render this upscaled texture to screen using linear scaling.
+        SDL_SetRenderTarget(renderer, NULL);
+        SDL_RenderCopy(renderer, texture_upscaled, NULL, NULL);
+    }
+    else
+    {
+        SDL_SetRenderTarget(renderer, NULL);
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
+    }
 
-    SDL_SetRenderTarget(renderer, NULL);
-    SDL_RenderCopy(renderer, texture_upscaled, NULL, NULL);
 
     // Draw!
 
@@ -830,6 +845,7 @@ void I_SetPalette (byte *doompalette)
         // Zero out the bottom two bits of each channel - the PC VGA
         // controller only supports 6 bits of accuracy.
 
+        palette[i].a = 0xFFU;
         palette[i].r = gammatable[usegamma][*doompalette++] & ~3;
         palette[i].g = gammatable[usegamma][*doompalette++] & ~3;
         palette[i].b = gammatable[usegamma][*doompalette++] & ~3;
@@ -917,10 +933,20 @@ void I_InitWindowIcon(void)
 
 static void SetScaleFactor(int factor)
 {
+    int height;
+
     // Pick 320x200 or 320x240, depending on aspect ratio correct
+    if (aspect_ratio_correct)
+    {
+        height = SCREENHEIGHT_4_3;
+    }
+    else
+    {
+        height = SCREENHEIGHT;
+    }
 
     window_width = factor * SCREENWIDTH;
-    window_height = factor * actualheight;
+    window_height = factor * height;
     fullscreen = false;
 }
 
@@ -980,9 +1006,9 @@ void I_GraphicsCheckCommandLine(void)
 
     //!
     // @category video
-    // @arg <x>
+    // @arg <W>
     //
-    // Specify the screen width, in pixels. Implies -window.
+    // Specify the screen width, in pixels.  Implies -window.
     //
 
     i = M_CheckParmWithArgs("-width", 1);
@@ -995,9 +1021,9 @@ void I_GraphicsCheckCommandLine(void)
 
     //!
     // @category video
-    // @arg <y>
+    // @arg <H>
     //
-    // Specify the screen height, in pixels. Implies -window.
+    // Specify the screen height, in pixels.  Implies -window.
     //
 
     i = M_CheckParmWithArgs("-height", 1);
@@ -1010,9 +1036,9 @@ void I_GraphicsCheckCommandLine(void)
 
     //!
     // @category video
-    // @arg <WxY>
+    // @arg <WxH>
     //
-    // Specify the dimensions of the window. Implies -window.
+    // Specify the dimensions of the window.  Implies -window.
     //
 
     i = M_CheckParmWithArgs("-geometry", 1);
@@ -1051,7 +1077,7 @@ void I_GraphicsCheckCommandLine(void)
     //!
     // @category video
     //
-    // Don't scale up the screen. Implies -window.
+    // Don't scale up the screen.  Implies -window.
     //
 
     if (M_CheckParm("-1")) 
@@ -1062,7 +1088,7 @@ void I_GraphicsCheckCommandLine(void)
     //!
     // @category video
     //
-    // Double up the screen to 2x its normal size. Implies -window.
+    // Double up the screen to 2x its normal size.  Implies -window.
     //
 
     if (M_CheckParm("-2")) 
@@ -1073,7 +1099,7 @@ void I_GraphicsCheckCommandLine(void)
     //!
     // @category video
     //
-    // Double up the screen to 3x its normal size. Implies -window.
+    // Double up the screen to 3x its normal size.  Implies -window.
     //
 
     if (M_CheckParm("-3")) 
@@ -1177,8 +1203,6 @@ static void SetVideoMode(void)
 {
     int w, h;
     int x, y;
-    unsigned int rmask, gmask, bmask, amask;
-    int bpp;
     int window_flags = 0, renderer_flags = 0;
     SDL_DisplayMode mode;
 
@@ -1235,8 +1259,6 @@ static void SetVideoMode(void)
             I_Error("Error creating window for video startup: %s",
             SDL_GetError());
         }
-
-        pixel_format = SDL_GetWindowPixelFormat(screen);
 
         SDL_SetWindowMinimumSize(screen, SCREENWIDTH, actualheight);
 
@@ -1348,12 +1370,10 @@ static void SetVideoMode(void)
 
     if (argbbuffer == NULL)
     {
-        SDL_PixelFormatEnumToMasks(pixel_format, &bpp,
-                                   &rmask, &gmask, &bmask, &amask);
-        argbbuffer = SDL_CreateRGBSurface(0,
-                                          SCREENWIDTH, SCREENHEIGHT, bpp,
-                                          rmask, gmask, bmask, amask);
-        SDL_FillRect(argbbuffer, NULL, 0);
+	    // pixels and pitch will be filled with the texture's values
+	    // in I_FinishUpdate()
+	    argbbuffer = SDL_CreateRGBSurfaceWithFormatFrom(
+                     NULL, w, h, 0, 0, SDL_PIXELFORMAT_ARGB8888);
     }
 
     if (texture != NULL)
@@ -1372,7 +1392,7 @@ static void SetVideoMode(void)
     // is going to change frequently.
 
     texture = SDL_CreateTexture(renderer,
-                                pixel_format,
+                                SDL_PIXELFORMAT_ARGB8888,
                                 SDL_TEXTUREACCESS_STREAMING,
                                 SCREENWIDTH, SCREENHEIGHT);
 
@@ -1500,6 +1520,7 @@ void I_BindVideoVariables(void)
     M_BindIntVariable("video_display",             &video_display);
     M_BindIntVariable("aspect_ratio_correct",      &aspect_ratio_correct);
     M_BindIntVariable("integer_scaling",           &integer_scaling);
+    M_BindIntVariable("smooth_pixel_scaling",      &smooth_pixel_scaling);
     M_BindIntVariable("vga_porch_flash",           &vga_porch_flash);
     M_BindIntVariable("startup_delay",             &startup_delay);
     M_BindIntVariable("fullscreen_width",          &fullscreen_width);
